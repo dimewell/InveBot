@@ -1,76 +1,45 @@
 import os
-import signal
-import time
-from dotenv import load_dotenv
 import telebot
+from fastapi import FastAPI
+from dotenv import load_dotenv
 import threading
-import logging
+from openai import OpenAI
 
 load_dotenv()
 
-TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-if not TELEGRAM_TOKEN:
-    raise RuntimeError('TELEGRAM_TOKEN is not set in environment')
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
-logger = logging.getLogger('invebot-worker')
+bot = telebot.TeleBot(BOT_TOKEN)
+client = OpenAI(api_key=OPENAI_KEY)
 
-bot = telebot.TeleBot(TELEGRAM_TOKEN, parse_mode='HTML')
+app = FastAPI()
 
-# --- Example handlers ---
-@bot.message_handler(commands=['start', 'help'])
-def send_welcome(message):
-    bot.send_message(message.chat.id, 'Привет! Бот запущен (Render Worker). Я не даю финансовых советов.')
+@app.get("/")
+def home():
+    return {"status": "bot is running"}
 
-
-# Add more handlers or import them from your handlers/ package
-# from handlers.start import register_handlers
-# register_handlers(bot)
-
-# Polling thread
-polling_thread = None
-stop_flag = False
-
-def polling_loop():
-    logger.info('Starting bot.polling (long polling)')
-    while not stop_flag:
-        try:
-            bot.polling(none_stop=True, interval=2, timeout=20)
-        except Exception as e:
-            logger.exception('Exception in polling: %s', e)
-            time.sleep(5)
-    logger.info('Exiting polling loop')
-
-def start_polling_in_thread():
-    global polling_thread
-    polling_thread = threading.Thread(target=polling_loop, name='PollingThread', daemon=True)
-    polling_thread.start()
-
-def stop_polling():
-    global stop_flag
-    stop_flag = True
+def ask_gpt(prompt: str) -> str:
     try:
-        bot.stop_polling()
-    except Exception:
-        pass
-    if polling_thread and polling_thread.is_alive():
-        polling_thread.join(timeout=5)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"Ошибка OpenAI: {e}"
 
-def handle_signal(signum, frame):
-    logger.info('Received signal %s, stopping...', signum)
-    stop_polling()
+@bot.message_handler(commands=['start'])
+def start(message):
+    bot.send_message(message.chat.id, "Привет! Отправь сообщение — я отвечу через OpenAI.")
 
-if __name__ == '__main__':
-    # Hook termination signals for graceful shutdown
-    signal.signal(signal.SIGTERM, handle_signal)
-    signal.signal(signal.SIGINT, handle_signal)
-    logger.info('InveBot worker starting...')
-    start_polling_in_thread()
-    # Keep the main thread alive while polling runs in background
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        logger.info('KeyboardInterrupt received, stopping...')
-        stop_polling()
+@bot.message_handler(func=lambda m: True)
+def reply(message):
+    answer = ask_gpt(message.text)
+    bot.send_message(message.chat.id, answer)
+
+def run_bot():
+    bot.infinity_polling(skip_pending=True)
+
+if __name__ == "__main__":
+    threading.Thread(target=run_bot).start()

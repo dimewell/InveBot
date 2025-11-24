@@ -1,5 +1,5 @@
-pytelegrambotapi==4.29.1
-python-dotenv==1.2.1
+fastapi
+uvicorn
+pyTelegramBotAPI
+python-dotenv
 openai
-psycopg2-binary
-requests
